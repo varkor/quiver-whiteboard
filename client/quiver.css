@@ -1,0 +1,27 @@
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
+body {
+	background: hsl(0, 0%, 10%);
+}
+
+canvas {
+	position: absolute;
+	left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    cursor: crosshair;
+}
+
+button {
+	font-size: larger;
+}
+
+div {
+    margin: 1em;
+}
+
+input[type="range"] {
+    margin: 10em -4em;
+    transform: rotate(-90deg) scale(1.5);
+}
