@@ -1,5 +1,7 @@
 "use strict";
 
+const SECONDARY_PEN_BUTTON = 1 << 5;
+
 class Canvas {
     constructor(width, height) {
         this.element = document.createElement("canvas");
@@ -131,6 +133,67 @@ class Pen {
     }
 }
 
+// An action that can be triggered by a button.
+class Action {
+    constructor(name, action) {
+        this.action = action;
+        this.element = document.createElement("li");
+        this.element.appendChild(document.createTextNode(name));
+        this.element.addEventListener("pointerdown", this.action);
+        this.element.addEventListener("mousedown", (event) => this.action(event, true));
+    }
+}
+
+let tools = [];
+
+// A tool that can be selected.
+class Tool extends Action {
+    constructor(name, properties) {
+        super(name, (event, stylus_button) => {
+            event.preventDefault();
+            if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
+                // If we select the tool while holding the pen button,
+                // then we're going to toggle the tool *without affecting*
+                // the currently-selected tools. This means we can have
+                // multiple tools active at once. This is useful for
+                // colour blending, for example.
+                this.active = !this.active;
+            } else {
+                // If we just select the tool (without holding anything),
+                // then we're going to deselect all other tools first.
+                for (const tool of Object.values(tools)) {
+                    if (tool !== this) {
+                        // If this tool is already active, we avoid
+                        // deactivating it and then activating it again,
+                        // in case of any side-effects.
+                        tool.active = false;
+                    }
+                }
+                this.active = true;
+            }
+        });
+
+        this.hue = null;
+        Object.assign(this, properties);
+        if (this.hue !== null) {
+            this.element.style.setProperty("--active-colour", `hsl(${this.hue}, 75%, 50%)`);
+        }
+    }
+
+    get active() {
+        return this.element.classList.contains("active");
+    }
+    set active(activate) {
+        if (this.active !== activate) {
+            if (activate) {
+                this.element.classList.add("active");
+            } else {
+                this.element.classList.remove("active");
+            }
+        }
+    }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     const canvas = new Canvas(640, 480);
     document.body.appendChild(canvas.element);
@@ -139,20 +202,45 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const MIN_STROKE_RADIUS = 5;
     const MAX_STROKE_RADIUS = 40;
-    const ALT_STROKE_COLOUR = "red";
-    const SECONDARY_PEN_BUTTON = 1 << 5;
+    const ALT_STROKE_COLOUR = "white";
     const SCROLL_DAMPENING = 40;
 
     let stroke_radius = 10;
 
-    const pointer_down = (event, alt_stroke_colour) => {
+    tools = {
+        red: new Tool("Red", { hue: 0 }),
+        green: new Tool("Green", { hue: 110 }),
+        blue: new Tool("Blue", { hue: 230 }),
+    };
+
+    const pen_state_from_event = (event) => {
+        const state = PenState.from_event(event, canvas.element);
+        const hues = [];
+        for (const tool of Object.values(tools)) {
+            if (tool.hue !== null && tool.active) {
+                hues.push(tool.hue);
+            }
+        }
+        if (hues.length > 0) {
+            // Compute the average hue (i.e. a circular mean).
+            let [x, y] = hues
+                .map((d) => d * Math.PI / 180)
+                .map((r) => [Math.sin(r), Math.cos(r)])
+                .reduce(([ax, ay], [bx, by]) => [ax + bx, ay + by], [0, 0]);
+            const hue = Math.atan2(x, y) * 180 / Math.PI;
+            state.colour = `hsl(${hue}, 75%, 50%)`;
+        }
+        return state;
+    };
+
+    const pointer_down = (event, stylus_button) => {
         if (event.button === 0) {
             event.preventDefault();
-            pen.state = PenState.from_event(event, canvas.element);
-            if (event.buttons & SECONDARY_PEN_BUTTON || alt_stroke_colour) {
+            pen.state = pen_state_from_event(event);
+            if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
                 // For some reason, the `mousedown` event doesn't properly
                 // capture `event.buttons` consistently with `pointermove`,
-                // so we have to override it with `alt_stroke_colour` here.
+                // so we have to override it with `stylus_button` here.
                 pen.state.colour = ALT_STROKE_COLOUR;
             }
             canvas.draw.colour = pen.state.colour;
@@ -160,11 +248,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    const pointer_move = (event, alt_stroke_colour) => {
+    const pointer_move = (event, stylus_button) => {
         event.preventDefault();
         if (pen.held) {
-            const now = PenState.from_event(event, canvas.element);
-            if (event.buttons & SECONDARY_PEN_BUTTON || alt_stroke_colour) {
+            const now = pen_state_from_event(event);
+            if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
                 now.colour = ALT_STROKE_COLOUR;
             }
 
@@ -227,11 +315,17 @@ document.addEventListener("DOMContentLoaded", () => {
     // If the stylus is deactivated, we want to treat it as lifting the stylus.
     canvas.element.addEventListener("pointercancel", pointer_up);
 
-    // A temporary "clear canvas" button.
-    const clear = document.createElement("button");
-    clear.appendChild(document.createTextNode("clear"));
-    clear.addEventListener("click", () => canvas.clear());
-    document.body.appendChild(clear);
+    // Tool panel.
+    const tool_panel = document.createElement("ul");
+    for (const tool of Object.values(tools)) {
+        tool_panel.appendChild(tool.element);
+    }
+    document.body.appendChild(tool_panel);
+
+    // Action panel.
+    const action_panel = document.createElement("ul");
+    action_panel.appendChild(new Action("Clear", () => canvas.clear()).element);
+    document.body.appendChild(action_panel);
 
     // We display a range to allow the user to change the range of stroke sizes.
     const stroke_range = document.createElement("input");
@@ -244,7 +338,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     const range_wrapper = document.createElement("div");
     range_wrapper.appendChild(stroke_range);
-    document.body.appendChild(range_wrapper);
+    document.body.appendChild(stroke_range);
 
     // The user can also change the range of stroke sizes by scrolling (or using
     // the secondary button and dragging using a stylus).
