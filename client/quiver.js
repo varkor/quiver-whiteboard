@@ -161,15 +161,19 @@ class Tool extends Action {
             } else {
                 // If we just select the tool (without holding anything),
                 // then we're going to deselect all other tools first.
+                let deselected_others = false;
                 for (const tool of Object.values(tools)) {
                     if (tool !== this) {
                         // If this tool is already active, we avoid
                         // deactivating it and then activating it again,
                         // in case of any side-effects.
-                        tool.active = false;
+                        if (tool.active) {
+                            deselected_others = true;
+                            tool.active = false;
+                        }
                     }
                 }
-                this.active = true;
+                this.active = deselected_others || !this.active;
             }
         });
 
