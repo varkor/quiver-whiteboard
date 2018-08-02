@@ -28,11 +28,47 @@ class Channel {
     }
 
     draw(data) {
-        // FIXME: We should do error-checking here... Especially considering right now we're just
-        // forwarding the data.
-        this.canvas.push(data);
-        for (const participant of this.participants) {
-            participant.send(JSON.stringify(data));
+        // FIXME: the validation is currently duplicated on the client and server. Ideally we
+        // would use `import` to share this functionality.
+        const validate_data = (properties) => {
+            return Server.validate_data(Object.assign({
+                kind: () => true, // We're already implicitly validating this property here.
+                shape: () => true, // As above.
+            }, properties), data);
+        };
+
+        const validate_pen_state = (state) => {
+            return Server.validate_data({
+                x: (x) => Number.isFinite(x),
+                y: (y) => Number.isFinite(y),
+                colour: (colour) => /^hsl\(\)$/,
+                radius: (radius) => Number.isFinite(radius) && radius >= 0,
+            }, state);
+        };
+
+        let valid_data = false;
+        switch (data.shape) {
+            case "circle":
+                valid_data = validate_data({
+                     at: validate_pen_state,
+                });
+                break;
+            case "bridge":
+                valid_data = validate_data({
+                     from: validate_pen_state,
+                     to: validate_pen_state,
+                });
+                break;
+            case "clear":
+                valid_data = validate_data({});
+                break;
+        }
+
+        if (valid_data) {
+            this.canvas.push(data);
+            for (const participant of this.participants) {
+                participant.send(JSON.stringify(data));
+            }
         }
     }
 }
@@ -75,6 +111,26 @@ class Server {
         });
     }
 
+    static validate_data(sig, data) {
+        const properties = new Set(Object.keys(data));
+        for (const [key, validator] of Object.entries(sig)) {
+            if (properties.delete(key)) {
+                if (!validator(data[key])) {
+                    // The data value did not pass the validation test. Reject it.
+                    return false;
+                }
+            } else {
+                // The data did not include a required field. Reject it.
+                return false;
+            }
+        }
+        if (properties.size !== 0) {
+            // The data included fields that were not present in the signature. Reject it.
+            return false;
+        }
+        return true;
+    }
+
     receive_message(ws, data) {
         // console.log("Received data:", data);
         switch (data.kind) {
@@ -98,13 +154,8 @@ class Server {
                 return;
             case "draw":
                 if (this.participants.has(ws)) {
-                    const shape = data.shape;
-                    if (["circle", "bridge", "clear"].includes(shape)) {
-                        const channel = this.participants.get(ws);
-                        channel.draw(data);
-                    } else {
-                        // The user tried to join an invalid shape.
-                    }
+                    const channel = this.participants.get(ws);
+                    channel.draw(data);
                 } else {
                     // The user is trying to draw something, when they don't
                     // even belong to a channel. How foolish.

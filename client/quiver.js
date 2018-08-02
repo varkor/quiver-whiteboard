@@ -8,9 +8,33 @@ class Client {
         this.delegate = delegate;
     }
 
+    static validate_data(sig, data) {
+        const properties = new Set(Object.keys(data));
+        for (const [key, validator] of Object.entries(sig)) {
+            if (properties.delete(key)) {
+                if (!validator(data[key])) {
+                    // The data value did not pass the validation test. Reject it.
+                    return false;
+                }
+            } else {
+                // The data did not include a required field. Reject it.
+                return false;
+            }
+        }
+        if (properties.size !== 0) {
+            // The data included fields that were not present in the signature. Reject it.
+            return false;
+        }
+        return true;
+    }
+
     connect(host, port) {
-        // FIXME: Yes, this is really bad. This is temporary, I swear.
-        this.ws = new WebSocket(`wss://${host}:${port}`);
+        if (/^[a-z0-9\.\-]+$/i.test(host) && /^[0-9]+$/.test(port)) {
+            this.ws = new WebSocket(`wss://${host}:${port}`);
+        } else {
+            console.error(`Tried to connect to an invalid host or port: ${host}:${port}`);
+            return;
+        }
 
         const SECOND = 1000;
         const timeout = setTimeout(() => {
@@ -52,7 +76,6 @@ class Client {
                 const canvas = data.canvas;
                 if (Array.isArray(canvas)) {
                     for (const action of canvas) {
-                        // FIXME: Do error-checking here.
                         this.delegate.draw(action);
                     }
                     return;
@@ -61,7 +84,6 @@ class Client {
                 }
                 return;
             case "draw":
-                // FIXME: Do error-checking here.
                 this.delegate.draw(data);
                 return;
         }
@@ -73,6 +95,14 @@ class Client {
     send_message(data) {
         if (this.ws.readyState === this.ws.OPEN) {
             console.log("Send data:", data);
+            if (data.kind === "draw") {
+                // We forward any drawing messages directly to the client, so that we
+                // can modify the canvas locally without any delay. The Painter's
+                // Algorithm will ensure that we end up with the correct result in the
+                // end, because we'll re-draw the data when we receive it from the
+                // server as well.
+                this.delegate.draw(data);
+            }
             this.ws.send(JSON.stringify(data));
         } else {
             // We should be able to delay sending messages until the WebSocket is ready,
@@ -176,8 +206,9 @@ class PenState {
     constructor(x, y, pressure) {
         this.x = x;
         this.y = y;
-        this.pressure = pressure;
         this.colour = "black";
+        this.pressure = pressure;
+        this.stroke_radius = 10;
     }
 
     static from_event(event, element) {
@@ -189,10 +220,13 @@ class PenState {
         );
     }
 
-    clone() {
-        const state = new PenState(this.x, this.y, this.pressure);
-        state.colour = this.colour;
-        return state;
+    as_message() {
+        return {
+            x: this.x,
+            y: this.y,
+            colour: this.colour,
+            radius: this.pressure * this.stroke_radius,
+        };
     }
 }
 
@@ -202,15 +236,18 @@ class Pen {
     constructor() {
         this.state = null;
     }
+
     get held() {
         return this.state !== null;
     }
+
     changed(now) {
         return (
             now.x !== this.state.x ||
             now.y !== this.state.y ||
             now.pressure !== this.state.pressure ||
-            now.colour !== this.state.colour
+            now.colour !== this.state.colour ||
+            now.stroke_radius !== this.state.stroke_radius
         );
     }
 }
@@ -304,28 +341,74 @@ document.addEventListener("DOMContentLoaded", () => {
         },
 
         draw(data) {
+            // FIXME: the validation is currently duplicated on the client and server. Ideally we
+            // would use `import` to share this functionality.
+            const validate_data = (properties) => {
+                return Client.validate_data(Object.assign({
+                    kind: () => true, // We're already implicitly validating this property here.
+                    shape: () => true, // As above.
+                }, properties), data);
+            };
+
+            const validate_pen_state = (state) => {
+                return Client.validate_data({
+                    x: (x) => Number.isFinite(x),
+                    y: (y) => Number.isFinite(y),
+                    colour: (colour) => /^hsl\(\)$/,
+                    radius: (radius) => Number.isFinite(radius) && radius >= 0,
+                }, state);
+            };
+
+            let valid_data = false;
             switch (data.shape) {
                 case "circle":
-                    canvas.draw.colour = data.at.colour;
-                    canvas.draw.circle(data.at.x, data.at.y, data.at.pressure * data.stroke_radius);
-                    return;
+                    valid_data = validate_data({
+                         at: validate_pen_state,
+                    });
+                    break;
                 case "bridge":
-                    canvas.draw.colour = canvas.draw.gradient(
-                        data.from.x, data.from.y, data.from.colour,
-                        data.to.x, data.to.y, data.to.colour
-                    );
-                    canvas.draw.circle(data.from.x, data.from.y, data.from.pressure * data.stroke_radius);
-                    canvas.draw.circle(data.to.x, data.to.y, data.to.pressure * data.stroke_radius);
-                    canvas.draw.connect_circles(
-                        data.from.x, data.from.y, data.from.pressure * data.stroke_radius,
-                        data.to.x, data.to.y, data.to.pressure * data.stroke_radius,
-                    );
-                    return;
+                    valid_data = validate_data({
+                         from: validate_pen_state,
+                         to: validate_pen_state,
+                    });
+                    break;
                 case "clear":
-                    canvas.clear();
-                    return;
+                    valid_data = validate_data({});
+                    break;
             }
-            // If we get here, then we've encountered an unknown shape.
+
+            if (valid_data) {
+                switch (data.shape) {
+                    case "circle":
+                        canvas.draw.colour = data.at.colour;
+                        canvas.draw.circle(data.at.x, data.at.y, data.at.radius);
+                        return;
+
+                    case "bridge":
+                        // We smoothly interpolate both the size and colour of the stroke,
+                        // so even if the user moves the pointer quickly, it should still
+                        // result in a smooth line. We *don't* yet interpolate the lines,
+                        // so the result does occasionally appear piecewise-linear, but
+                        // it looks fine.
+                        canvas.draw.colour = canvas.draw.gradient(
+                            data.from.x, data.from.y, data.from.colour,
+                            data.to.x, data.to.y, data.to.colour,
+                        );
+                        canvas.draw.circle(data.from.x, data.from.y, data.from.radius);
+                        canvas.draw.circle(data.to.x, data.to.y, data.to.radius);
+                        canvas.draw.connect_circles(
+                            data.from.x, data.from.y, data.from.radius,
+                            data.to.x, data.to.y, data.to.radius,
+                        );
+                        return;
+
+                    case "clear":
+                        canvas.clear();
+                        return;
+                }
+            } else {
+                console.error("Received bad drawing data from the server:", data);
+            }
         }
     });
     // For now, we're going to fetch the host and port for the WebSocket server from the query string.
@@ -355,6 +438,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const pen_state_from_event = (event) => {
         const state = PenState.from_event(event, canvas.element);
+        state.stroke_radius = stroke_radius;
         const hues = [];
         for (const tool of Object.values(tools)) {
             if (tool.hue !== null && tool.active) {
@@ -383,13 +467,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 // so we have to override it with `stylus_button` here.
                 pen.state.colour = ALT_STROKE_COLOUR;
             }
-            canvas.draw.colour = pen.state.colour;
-            canvas.draw.circle(pen.state.x, pen.state.y, pen.state.pressure * stroke_radius);
             client.send_message({
                 kind: "draw",
                 shape: "circle",
-                at: pen.state,
-                stroke_radius,
+                at: pen.state.as_message(),
             });
         }
     };
@@ -403,30 +484,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (pen.changed(now)) {
-                // We smoothly interpolate both the size and colour of the stroke,
-                // so even if the user moves the pointer quickly, it should still
-                // result in a smooth line. We *don't* yet interpolate the lines,
-                // so the result does occasionally appear piecewise-linear, but
-                // it looks fine.
-                // FIXME: Change `stroke_radius` to a property on the pen. I'm not
-                // sure if it can actually be changed mid-stroke, but it's no bad
-                // thing to account for.
-                canvas.draw.colour = canvas.draw.gradient(
-                    pen.state.x, pen.state.y, pen.state.colour,
-                    now.x, now.y, now.colour
-                );
-                canvas.draw.circle(pen.state.x, pen.state.y, pen.state.pressure * stroke_radius);
-                canvas.draw.circle(now.x, now.y, now.pressure * stroke_radius);
-                canvas.draw.connect_circles(
-                    pen.state.x, pen.state.y, pen.state.pressure * stroke_radius,
-                    now.x, now.y, now.pressure * stroke_radius,
-                );
                 client.send_message({
                     kind: "draw",
                     shape: "bridge",
-                    from: pen.state,
-                    to: now,
-                    stroke_radius,
+                    from: pen.state.as_message(),
+                    to: now.as_message(),
                 });
             }
 
