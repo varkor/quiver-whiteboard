@@ -18,7 +18,7 @@ button {
 	font-size: larger;
 }
 
-div {
+.range_wrapper {
     width: 4em;
     height: 20em;
     margin-top: 2em;
@@ -98,4 +98,28 @@ ul li.secondary::before {
 
 ul + ul {
     margin-top: 2em;
+}
+
+.overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 1;
+    background: hsla(0, 0%, 0%, 0.8);
+}
+.overlay::before {
+    content: attr(data-descr);
+    display: block;
+    position: absolute;
+    width: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    text-align: center;
+    color: hsl(0, 0%, 80%);
+    font: 20pt sans-serif;
+}
+.overlay.hidden {
+    display: none;
 }

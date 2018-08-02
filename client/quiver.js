@@ -1,5 +1,87 @@
 "use strict";
 
+class MessageError extends Error {}
+
+class Client {
+    constructor(delegate) {
+        this.ws = null;
+        this.delegate = delegate;
+    }
+
+    connect(host, port) {
+        // FIXME: Yes, this is really bad. This is temporary, I swear.
+        this.ws = new WebSocket(`wss://${host}:${port}`);
+
+        const SECOND = 1000;
+        const timeout = setTimeout(() => {
+            console.error("WebSocket timed out while attempting to connect to the server.");
+            this.ws.close();
+        }, 5 * SECOND);
+
+        this.ws.addEventListener("open", () => {
+            clearTimeout(timeout);
+            this.delegate.connect();
+            this.ws.send(JSON.stringify({
+                kind: "join",
+                channel: "all",
+            }));
+        });
+
+        this.ws.addEventListener("message", (message) => {
+            try {
+                const data = JSON.parse(message.data);
+                this.receive_message(data);
+            } catch (error) {
+                // Received bad message from server. This doesn't necessarily mean the server's
+                // misbehaving (though who's to say it's not?). We might also get errors with faulty
+                // connections. We're just going to ignore them, though.
+                console.error(message, error);
+            }
+        });
+
+        this.ws.addEventListener("close", () => {
+            this.delegate.disconnect();
+            console.log("WebSocket connection closed.");
+        });
+    }
+
+    receive_message(data) {
+        console.log("Received data:", data);
+        switch (data.kind) {
+            case "channel":
+                const canvas = data.canvas;
+                if (Array.isArray(canvas)) {
+                    for (const action of canvas) {
+                        // FIXME: Do error-checking here.
+                        this.delegate.draw(action);
+                    }
+                    return;
+                } else {
+                    // The server sent us malformed channel data.
+                }
+                return;
+            case "draw":
+                // FIXME: Do error-checking here.
+                this.delegate.draw(data);
+                return;
+        }
+        // All valid arms of the switch return early, so if we get here, then something
+        // must be wrong with the message data.
+        throw new MessageError();
+    }
+
+    send_message(data) {
+        if (this.ws.readyState === this.ws.OPEN) {
+            console.log("Send data:", data);
+            this.ws.send(JSON.stringify(data));
+        } else {
+            // We should be able to delay sending messages until the WebSocket is ready,
+            // but for now, we'll simply ignore the message.
+            console.error("WebSocket wasn't ready for data:", data);
+        }
+    }
+}
+
 const SECONDARY_PEN_BUTTON = 1 << 5;
 
 class Canvas {
@@ -199,8 +281,62 @@ class Tool extends Action {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+    const connecting_overlay = document.createElement("div");
+    connecting_overlay.classList.add("overlay");
+    connecting_overlay.dataset.descr = "Connecting...";
+    document.body.appendChild(connecting_overlay);
+
     const canvas = new Canvas(640, 480);
     document.body.appendChild(canvas.element);
+
+    const client = new Client({
+        connect() {
+            connecting_overlay.classList.add("hidden");
+        },
+
+        disconnect() {
+            if (connecting_overlay.classList.contains("hidden")) {
+                connecting_overlay.classList.remove("hidden");
+                connecting_overlay.dataset.descr = "Disconnected from server. Please try refreshing.";
+            } else {
+                connecting_overlay.dataset.descr = "Could not connect to server. Please try refreshing.";
+            }
+        },
+
+        draw(data) {
+            switch (data.shape) {
+                case "circle":
+                    canvas.draw.colour = data.at.colour;
+                    canvas.draw.circle(data.at.x, data.at.y, data.at.pressure * data.stroke_radius);
+                    return;
+                case "bridge":
+                    canvas.draw.colour = canvas.draw.gradient(
+                        data.from.x, data.from.y, data.from.colour,
+                        data.to.x, data.to.y, data.to.colour
+                    );
+                    canvas.draw.circle(data.from.x, data.from.y, data.from.pressure * data.stroke_radius);
+                    canvas.draw.circle(data.to.x, data.to.y, data.to.pressure * data.stroke_radius);
+                    canvas.draw.connect_circles(
+                        data.from.x, data.from.y, data.from.pressure * data.stroke_radius,
+                        data.to.x, data.to.y, data.to.pressure * data.stroke_radius,
+                    );
+                    return;
+                case "clear":
+                    canvas.clear();
+                    return;
+            }
+            // If we get here, then we've encountered an unknown shape.
+        }
+    });
+    // For now, we're going to fetch the host and port for the WebSocket server from the query string.
+    const query_pairs = new Map(window.location.search.slice(1).split("&").map((pair) => pair.split("=")));
+    const host = query_pairs.get("host");
+    const port = query_pairs.get("port");
+    if (host !== undefined && port !== undefined) {
+        client.connect(decodeURIComponent(host), decodeURIComponent(port));
+    } else {
+        console.log("The host and port must be present in the URL query string to connect to the server.");
+    }
 
     const pen = new Pen();
 
@@ -249,6 +385,12 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             canvas.draw.colour = pen.state.colour;
             canvas.draw.circle(pen.state.x, pen.state.y, pen.state.pressure * stroke_radius);
+            client.send_message({
+                kind: "draw",
+                shape: "circle",
+                at: pen.state,
+                stroke_radius,
+            });
         }
     };
 
@@ -266,6 +408,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 // result in a smooth line. We *don't* yet interpolate the lines,
                 // so the result does occasionally appear piecewise-linear, but
                 // it looks fine.
+                // FIXME: Change `stroke_radius` to a property on the pen. I'm not
+                // sure if it can actually be changed mid-stroke, but it's no bad
+                // thing to account for.
                 canvas.draw.colour = canvas.draw.gradient(
                     pen.state.x, pen.state.y, pen.state.colour,
                     now.x, now.y, now.colour
@@ -276,6 +421,13 @@ document.addEventListener("DOMContentLoaded", () => {
                     pen.state.x, pen.state.y, pen.state.pressure * stroke_radius,
                     now.x, now.y, now.pressure * stroke_radius,
                 );
+                client.send_message({
+                    kind: "draw",
+                    shape: "bridge",
+                    from: pen.state,
+                    to: now,
+                    stroke_radius,
+                });
             }
 
             pen.state = now;
@@ -328,7 +480,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Action panel.
     const action_panel = document.createElement("ul");
-    action_panel.appendChild(new Action("Clear", () => canvas.clear()).element);
+    action_panel.appendChild(new Action("Clear", () => {
+        canvas.clear();
+        client.send_message({
+            kind: "draw",
+            shape: "clear",
+        });
+    }).element);
     document.body.appendChild(action_panel);
 
     // We display a range to allow the user to change the range of stroke sizes.
@@ -341,6 +499,7 @@ document.addEventListener("DOMContentLoaded", () => {
         stroke_radius = parseInt(stroke_range.value);
     });
     const range_wrapper = document.createElement("div");
+    range_wrapper.classList.add("range_wrapper");
     range_wrapper.appendChild(stroke_range);
     document.body.appendChild(stroke_range);
 

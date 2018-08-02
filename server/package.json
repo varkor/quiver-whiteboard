@@ -1,0 +1,8 @@
+{
+    "name": "quiver",
+    "version": "0.0.0",
+    "main": "server.js",
+    "dependencies": {
+        "ws": "6.0.0"
+    }
+}
