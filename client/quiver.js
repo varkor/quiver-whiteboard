@@ -73,6 +73,7 @@ class Client {
         console.log("Received data:", data);
         switch (data.kind) {
             case "channel":
+            this.delegate.join();
                 const canvas = data.canvas;
                 if (Array.isArray(canvas)) {
                     for (const action of canvas) {
@@ -115,10 +116,11 @@ class Client {
 const SECONDARY_PEN_BUTTON = 1 << 5;
 
 class Canvas {
-    constructor(width, height) {
+    constructor(width, height, background) {
         this.element = document.createElement("canvas");
         this.context = this.element.getContext("2d");
         this.draw = new Draw(this.context);
+        this.background = background;
 
         const z = Canvas.PIXEL_RATIO;
         [this.element.width, this.element.height] = [width * z, height * z];
@@ -127,8 +129,12 @@ class Canvas {
     }
 
     clear() {
-        this.context.fillStyle = "white";
-        this.context.fillRect(0, 0, this.element.width, this.element.height);
+        if (this.background !== null) {
+            this.context.fillStyle = this.background;
+            this.context.fillRect(0, 0, this.element.width, this.element.height);
+        } else {
+            this.context.clearRect(0, 0, this.element.width, this.element.height);
+        }
     }
 }
 Canvas.PIXEL_RATIO = window.devicePixelRatio;
@@ -149,11 +155,15 @@ class Draw {
         this.context.fillStyle = this.context.strokeStyle = this._colour;
     }
 
-    circle(x, y, r) {
+    circle(x, y, r, fill = true) {
         const z = Canvas.PIXEL_RATIO;
         this.context.beginPath();
         this.context.arc(x * z, y * z, r * z, 0, 2 * Math.PI, false);
-        this.context.fill();
+        if (fill) {
+            this.context.fill();
+        } else {
+            this.context.stroke();
+        }
     }
 
     // Smoothly connect two circles by computing their outer tangent lines.
@@ -203,12 +213,13 @@ class Draw {
 
 // A container for pointer state (see `Pen`).
 class PenState {
-    constructor(x, y, pressure) {
+    constructor(x, y, pressure, pointerType) {
         this.x = x;
         this.y = y;
         this.colour = "black";
         this.pressure = pressure;
         this.stroke_radius = 10;
+        this.pointerType = pointerType;
     }
 
     static from_event(event, element) {
@@ -217,6 +228,7 @@ class PenState {
             event.pageX - window.scrollX - rect.left,
             event.pageY - window.scrollY - rect.top,
             event.pressure,
+            event.pointerType,
         );
     }
 
@@ -235,14 +247,12 @@ class PenState {
 class Pen {
     constructor() {
         this.state = null;
-    }
-
-    get held() {
-        return this.state !== null;
+        this.held = false;
     }
 
     changed(now) {
         return (
+            now.held !== this.held ||
             now.x !== this.state.x ||
             now.y !== this.state.y ||
             now.pressure !== this.state.pressure ||
@@ -323,12 +333,16 @@ document.addEventListener("DOMContentLoaded", () => {
     connecting_overlay.dataset.descr = "Connecting...";
     document.body.appendChild(connecting_overlay);
 
-    const canvas = new Canvas(640, 480);
+    const canvas = new Canvas(640, 480, "white");
     document.body.appendChild(canvas.element);
+
+    const brush_layer = new Canvas(640, 480, null);
+    brush_layer.element.classList.add("noninteractive");
+    document.body.appendChild(brush_layer.element);
 
     const client = new Client({
         connect() {
-            connecting_overlay.classList.add("hidden");
+            connecting_overlay.dataset.descr = "Loading canvas...";
         },
 
         disconnect() {
@@ -338,6 +352,10 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 connecting_overlay.dataset.descr = "Could not connect to server. Please try refreshing.";
             }
+        },
+
+        join() {
+            connecting_overlay.classList.add("hidden");
         },
 
         draw(data) {
@@ -458,9 +476,11 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     const pointer_down = (event, stylus_button) => {
+        pen.state = pen_state_from_event(event);
+
         if (event.button === 0) {
             event.preventDefault();
-            pen.state = pen_state_from_event(event);
+            pen.held = true;
             if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
                 // For some reason, the `mousedown` event doesn't properly
                 // capture `event.buttons` consistently with `pointermove`,
@@ -475,10 +495,26 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
+    const draw_brush = (stroke_radius) => {
+        brush_layer.clear();
+        if (pen.state !== null) {
+            brush_layer.draw.circle(pen.state.x, pen.state.y, 0.5 * stroke_radius, false);
+            if (pen.state.pointerType !== "mouse") {
+                // We'll draw a dashed circle of the maximum possible
+                // stroke size for pointers that have variable pressure.
+                brush_layer.context.setLineDash([4, 4]);
+                brush_layer.draw.circle(pen.state.x, pen.state.y, stroke_radius, false);
+                brush_layer.context.setLineDash([]);
+            }
+        }
+    }
+
     const pointer_move = (event, stylus_button) => {
         event.preventDefault();
+
+        const now = pen_state_from_event(event);
+
         if (pen.held) {
-            const now = pen_state_from_event(event);
             if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
                 now.colour = ALT_STROKE_COLOUR;
             }
@@ -491,15 +527,17 @@ document.addEventListener("DOMContentLoaded", () => {
                     to: now.as_message(),
                 });
             }
-
-            pen.state = now;
         }
+
+        pen.state = now;
+
+        draw_brush(pen.state.stroke_radius);
     };
 
     const pointer_up = (event) => {
         if (event.button === -1 || event.button === 0) {
             event.preventDefault();
-            pen.state = null;
+            pen.held = false;
         }
     };
 
@@ -551,15 +589,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }).element);
     document.body.appendChild(action_panel);
 
+    const update_stroke_radius = (value) => {
+        stroke_radius = value;
+        draw_brush(stroke_radius);
+    };
+
     // We display a range to allow the user to change the range of stroke sizes.
     const stroke_range = document.createElement("input");
     stroke_range.type = "range";
     stroke_range.min = MIN_STROKE_RADIUS;
     stroke_range.max = MAX_STROKE_RADIUS;
     stroke_range.value = stroke_radius;
-    stroke_range.addEventListener("input", () => {
-        stroke_radius = parseInt(stroke_range.value);
-    });
+    stroke_range.addEventListener("input", () => update_stroke_radius(parseInt(stroke_range.value)));
     const range_wrapper = document.createElement("div");
     range_wrapper.classList.add("range_wrapper");
     range_wrapper.appendChild(stroke_range);
@@ -570,6 +611,6 @@ document.addEventListener("DOMContentLoaded", () => {
     window.addEventListener("wheel", (event) => {
         event.preventDefault();
         stroke_range.value = Math.round(stroke_radius - event.wheelDeltaY / SCROLL_DAMPENING);
-        stroke_radius = parseInt(stroke_range.value);
+        update_stroke_radius(parseInt(stroke_range.value));
     });
 });

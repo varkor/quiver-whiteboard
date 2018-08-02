@@ -11,7 +11,7 @@ canvas {
 	position: absolute;
 	left: 50%; top: 50%;
     transform: translate(-50%, -50%);
-    cursor: crosshair;
+    cursor: none;
 }
 
 button {
@@ -122,4 +122,8 @@ ul + ul {
 }
 .overlay.hidden {
     display: none;
+}
+
+.noninteractive {
+    pointer-events: none;
 }
