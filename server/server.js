@@ -41,7 +41,8 @@ class Channel {
             return Server.validate_data({
                 x: (x) => Number.isFinite(x),
                 y: (y) => Number.isFinite(y),
-                colour: (colour) => /^hsl\(\)$/,
+                tool: (tool) => ["brush", "eraser"].includes(tool),
+                colour: (colour) => true, // FIXME: We're not validating colours at the moment.
                 radius: (radius) => Number.isFinite(radius) && radius >= 0,
             }, state);
         };
@@ -50,13 +51,13 @@ class Channel {
         switch (data.shape) {
             case "circle":
                 valid_data = validate_data({
-                     at: validate_pen_state,
+                    at: validate_pen_state,
                 });
                 break;
             case "bridge":
                 valid_data = validate_data({
-                     from: validate_pen_state,
-                     to: validate_pen_state,
+                    from: validate_pen_state,
+                    to: validate_pen_state,
                 });
                 break;
             case "clear":

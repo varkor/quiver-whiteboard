@@ -70,14 +70,14 @@ class Client {
     }
 
     receive_message(data) {
-        console.log("Received data:", data);
+        // console.log("Received data:", data);
         switch (data.kind) {
             case "channel":
             this.delegate.join();
                 const canvas = data.canvas;
                 if (Array.isArray(canvas)) {
                     for (const action of canvas) {
-                        this.delegate.draw(action);
+                        this.delegate.draw(action, true);
                     }
                     return;
                 } else {
@@ -85,7 +85,7 @@ class Client {
                 }
                 return;
             case "draw":
-                this.delegate.draw(data);
+                this.delegate.draw(data, true);
                 return;
         }
         // All valid arms of the switch return early, so if we get here, then something
@@ -95,14 +95,14 @@ class Client {
 
     send_message(data) {
         if (this.ws.readyState === this.ws.OPEN) {
-            console.log("Send data:", data);
+            // console.log("Sent data:", data);
             if (data.kind === "draw") {
                 // We forward any drawing messages directly to the client, so that we
                 // can modify the canvas locally without any delay. The Painter's
                 // Algorithm will ensure that we end up with the correct result in the
                 // end, because we'll re-draw the data when we receive it from the
                 // server as well.
-                this.delegate.draw(data);
+                this.delegate.draw(data, false);
             }
             this.ws.send(JSON.stringify(data));
         } else {
@@ -217,6 +217,7 @@ class PenState {
     constructor(x, y, pressure, pointerType) {
         this.x = x;
         this.y = y;
+        this.tool = "brush";
         this.colour = "black";
         this.pressure = pressure;
         this.stroke_radius = 10;
@@ -237,6 +238,7 @@ class PenState {
         return {
             x: this.x,
             y: this.y,
+            tool: this.tool,
             colour: this.colour,
             radius: this.pressure * this.stroke_radius,
         };
@@ -253,9 +255,9 @@ class Pen {
 
     changed(now) {
         return (
-            now.held !== this.held ||
             now.x !== this.state.x ||
             now.y !== this.state.y ||
+            now.tool !== this.state.tool ||
             now.pressure !== this.state.pressure ||
             now.colour !== this.state.colour ||
             now.stroke_radius !== this.state.stroke_radius
@@ -364,7 +366,7 @@ document.addEventListener("DOMContentLoaded", () => {
             connecting_overlay.classList.add("hidden");
         },
 
-        draw(data) {
+        draw(data, from_server) {
             // FIXME: the validation is currently duplicated on the client and server. Ideally we
             // would use `import` to share this functionality.
             const validate_data = (properties) => {
@@ -378,7 +380,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 return Client.validate_data({
                     x: (x) => Number.isFinite(x),
                     y: (y) => Number.isFinite(y),
-                    colour: (colour) => /^hsl\(\)$/,
+                    tool: (tool) => ["brush", "eraser"].includes(tool),
+                    colour: (colour) => true, // FIXME: We're not validating colours at the moment.
                     radius: (radius) => Number.isFinite(radius) && radius >= 0,
                 }, state);
             };
@@ -387,13 +390,13 @@ document.addEventListener("DOMContentLoaded", () => {
             switch (data.shape) {
                 case "circle":
                     valid_data = validate_data({
-                         at: validate_pen_state,
+                        at: validate_pen_state,
                     });
                     break;
                 case "bridge":
                     valid_data = validate_data({
-                         from: validate_pen_state,
-                         to: validate_pen_state,
+                        from: validate_pen_state,
+                        to: validate_pen_state,
                     });
                     break;
                 case "clear":
@@ -409,21 +412,29 @@ document.addEventListener("DOMContentLoaded", () => {
                         return;
 
                     case "bridge":
-                        // We smoothly interpolate both the size and colour of the stroke,
-                        // so even if the user moves the pointer quickly, it should still
-                        // result in a smooth line. We *don't* yet interpolate the lines,
-                        // so the result does occasionally appear piecewise-linear, but
-                        // it looks fine.
-                        canvas.draw.colour = canvas.draw.gradient(
-                            data.from.x, data.from.y, data.from.colour,
-                            data.to.x, data.to.y, data.to.colour,
-                        );
-                        canvas.draw.circle(data.from.x, data.from.y, data.from.radius);
-                        canvas.draw.circle(data.to.x, data.to.y, data.to.radius);
-                        canvas.draw.connect_circles(
-                            data.from.x, data.from.y, data.from.radius,
-                            data.to.x, data.to.y, data.to.radius,
-                        );
+                        if (data.from.tool === data.to.tool) {
+                            // If the tool is constant across a stroke, then we smoothly
+                            // interpolate both the size and colour of the stroke, so even
+                            // if the user moves the pointer quickly, it should still
+                            // result in a smooth line. We *don't* yet interpolate the lines,
+                            // so the result does occasionally appear piecewise-linear, but
+                            // it looks fine.
+                            canvas.draw.colour = canvas.draw.gradient(
+                                data.from.x, data.from.y, data.from.colour,
+                                data.to.x, data.to.y, data.to.colour,
+                            );
+                            canvas.draw.circle(data.from.x, data.from.y, data.from.radius);
+                            canvas.draw.circle(data.to.x, data.to.y, data.to.radius);
+                            canvas.draw.connect_circles(
+                                data.from.x, data.from.y, data.from.radius,
+                                data.to.x, data.to.y, data.to.radius,
+                            );
+                        } else {
+                            // If the tool changes mid-stroke, we treat it as a new
+                            // stroke and do not interpolate.
+                            canvas.draw.colour = data.to.colour;
+                            canvas.draw.circle(data.to.x, data.to.y, data.to.radius);
+                        }
                         return;
 
                     case "clear":
@@ -431,7 +442,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         return;
                 }
             } else {
-                console.error("Received bad drawing data from the server:", data);
+                console.error(`Received bad drawing data from ${from_server ? "the server": "itself"}:`, data);
             }
         }
     });
@@ -449,7 +460,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const MIN_STROKE_RADIUS = 5;
     const MAX_STROKE_RADIUS = 40;
-    const ALT_STROKE_COLOUR = "white";
+    const MAIN_TOOL = "brush";
+    const ALT_TOOL = "eraser";
     const SCROLL_DAMPENING = 40;
 
     let stroke_radius = 10;
@@ -458,41 +470,63 @@ document.addEventListener("DOMContentLoaded", () => {
         red: new Tool("Red", { hue: 0 }),
         green: new Tool("Green", { hue: 110 }),
         blue: new Tool("Blue", { hue: 230 }),
+        eraser: new Tool("Eraser", {}),
+    };
+
+    const update_state_for_tool = (state, tool) => {
+        if (state === null) {
+            return;
+        }
+
+        switch (tool) {
+            case "brush":
+                const hues = [];
+                for (const tool of Object.values(tools)) {
+                    if (tool.hue !== null && tool.active) {
+                        hues.push(tool.hue);
+                    }
+                }
+                if (hues.length > 0) {
+                    // Compute the average hue (i.e. a circular mean).
+                    let [x, y] = hues
+                        .map((d) => d * Math.PI / 180)
+                        .map((r) => [Math.sin(r), Math.cos(r)])
+                        .reduce(([ax, ay], [bx, by]) => [ax + bx, ay + by], [0, 0]);
+                    const hue = Math.atan2(x, y) * 180 / Math.PI;
+                    state.colour = `hsl(${hue}, 75%, 50%)`;
+                }
+                state.stroke_radius = stroke_radius;
+                break;
+            case "eraser":
+                state.colour = "white";
+                state.stroke_radius = stroke_radius * 4;
+                break;
+        }
+        state.tool = tool;
     };
 
     const pen_state_from_event = (event) => {
         const state = PenState.from_event(event, canvas.element);
-        state.stroke_radius = stroke_radius;
-        const hues = [];
-        for (const tool of Object.values(tools)) {
-            if (tool.hue !== null && tool.active) {
-                hues.push(tool.hue);
-            }
-        }
-        if (hues.length > 0) {
-            // Compute the average hue (i.e. a circular mean).
-            let [x, y] = hues
-                .map((d) => d * Math.PI / 180)
-                .map((r) => [Math.sin(r), Math.cos(r)])
-                .reduce(([ax, ay], [bx, by]) => [ax + bx, ay + by], [0, 0]);
-            const hue = Math.atan2(x, y) * 180 / Math.PI;
-            state.colour = `hsl(${hue}, 75%, 50%)`;
+        if (tools.eraser.active) {
+            update_state_for_tool(state, "eraser");
+        } else {
+            update_state_for_tool(state, "brush");
+
         }
         return state;
     };
 
-    const pointer_down = (event, stylus_button) => {
+    const pointer_down = (event, original_event = event) => {
         pen.state = pen_state_from_event(event);
+        if (event.buttons & SECONDARY_PEN_BUTTON || event.shiftKey) {
+            update_state_for_tool(pen.state, ALT_TOOL);
+        }
 
         if (event.button === 0) {
-            event.preventDefault();
+            // This is a hack to get around the fact you can't call `preventDefault` on
+            // non-native JavaScript objects.
+            original_event.preventDefault();
             pen.held = true;
-            if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
-                // For some reason, the `mousedown` event doesn't properly
-                // capture `event.buttons` consistently with `pointermove`,
-                // so we have to override it with `stylus_button` here.
-                pen.state.colour = ALT_STROKE_COLOUR;
-            }
             client.send_message({
                 kind: "draw",
                 shape: "circle",
@@ -515,24 +549,24 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    const pointer_move = (event, stylus_button) => {
+    const pointer_move = (event) => {
         event.preventDefault();
 
         const now = pen_state_from_event(event);
+        if (event.buttons & SECONDARY_PEN_BUTTON || event.shiftKey) {
+            // Unfortunately, for some pens, `events.buttons` is only updated when the
+            // pen is held down, not when hovering, so we can't update the cursor in
+            // this case.
+            update_state_for_tool(now, ALT_TOOL);
+        }
 
-        if (pen.held) {
-            if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
-                now.colour = ALT_STROKE_COLOUR;
-            }
-
-            if (pen.changed(now)) {
-                client.send_message({
-                    kind: "draw",
-                    shape: "bridge",
-                    from: pen.state.as_message(),
-                    to: now.as_message(),
-                });
-            }
+        if (pen.held && pen.changed(now)) {
+            client.send_message({
+                kind: "draw",
+                shape: "bridge",
+                from: pen.state.as_message(),
+                to: now.as_message(),
+            });
         }
 
         pen.state = now;
@@ -551,7 +585,23 @@ document.addEventListener("DOMContentLoaded", () => {
     // For some reason, these trigger as mouse events instead of pointer events.
     // Note: these are *not* actual mouse events, which will go through the pointer
     // events.
-    canvas.element.addEventListener("mousedown", (event) => pointer_down(event, true));
+    canvas.element.addEventListener("mousedown", (event) => {
+        // For some reason, the `mousedown` event doesn't properly
+        // capture `event.buttons` consistently with `pointermove`,
+        // so we have to override `event` here. This is also
+        // useful for overriding `pressure` and `pointerType`.
+        const overridden_event = {};
+        // We can't use `Object.assign` here, because the properties
+        // aren't enumerable.
+        for (const key in event) {
+            overridden_event[key] = event[key];
+        }
+        return pointer_down(Object.assign(overridden_event, {
+            buttons: SECONDARY_PEN_BUTTON,
+            pressure: 0.5,
+            pointerType: "pen",
+        }), event);
+    });
     window.addEventListener("mouseup", pointer_up);
 
     // One unfortunate consequence of the Pointer APIs is that `pointerdown`
@@ -577,6 +627,23 @@ document.addEventListener("DOMContentLoaded", () => {
     // If the stylus is deactivated, we want to treat it as lifting the stylus.
     canvas.element.addEventListener("pointercancel", pointer_up);
 
+    // The shift key is used to toggle the alt tool (if the user's not using the
+    // stylus buttons).
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Shift" && pen.state !== null) {
+            event.preventDefault();
+            update_state_for_tool(pen.state, ALT_TOOL);
+            draw_brush(pen.state.stroke_radius);
+        }
+    });
+    document.addEventListener("keyup", (event) => {
+        if (event.key === "Shift" && pen.state !== null && !tools.eraser.active) {
+            event.preventDefault();
+            update_state_for_tool(pen.state, MAIN_TOOL);
+            draw_brush(pen.state.stroke_radius);
+        }
+    });
+
     // Tool panel.
     const tool_panel = document.createElement("ul");
     for (const tool of Object.values(tools)) {
@@ -599,7 +666,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const update_stroke_radius = (value) => {
         stroke_radius = value;
-        draw_brush(stroke_radius);
+        let scale = 1;
+        if (pen.state !== null && pen.state.tool === "eraser") {
+            scale = 4;
+        }
+        draw_brush(stroke_radius * scale);
     };
 
     // We display a range to allow the user to change the range of stroke sizes.
