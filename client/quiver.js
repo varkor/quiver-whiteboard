@@ -28,11 +28,11 @@ class Client {
         return true;
     }
 
-    connect(host, port) {
-        if (/^[a-z0-9\.\-]+$/i.test(host) && /^[0-9]+$/.test(port)) {
+    connect(host, port, channel) {
+        if (/^[a-z0-9\.\-]+$/i.test(host) && /^[0-9]+$/.test(port) && /^[a-z0-9_\-]+$/i.test(channel)) {
             this.ws = new WebSocket(`wss://${host}:${port}`);
         } else {
-            console.error(`Tried to connect to an invalid host or port: ${host}:${port}`);
+            console.error(`Tried to connect to an invalid host, port or channel: ${host}:${port}#${channel}`);
             return;
         }
 
@@ -47,7 +47,7 @@ class Client {
             this.delegate.connect();
             this.ws.send(JSON.stringify({
                 kind: "join",
-                channel: "all",
+                channel,
             }));
         });
 
@@ -447,11 +447,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
     // For now, we're going to fetch the host and port for the WebSocket server from the query string.
-    const query_pairs = new Map(window.location.search.slice(1).split("&").map((pair) => pair.split("=")));
+    const query_pairs = new Map(atob(window.location.search.slice(1)).split("&").map((pair) => pair.split("=")));
     const host = query_pairs.get("host");
     const port = query_pairs.get("port");
-    if (host !== undefined && port !== undefined) {
-        client.connect(decodeURIComponent(host), decodeURIComponent(port));
+    const channel = query_pairs.get("channel");
+    if (host !== undefined && port !== undefined && channel !== undefined) {
+        client.connect(decodeURIComponent(host), decodeURIComponent(port), decodeURIComponent(channel));
     } else {
         console.log("The host and port must be present in the URL query string to connect to the server.");
     }

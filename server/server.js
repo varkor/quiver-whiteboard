@@ -1,4 +1,5 @@
 const WebSocket = require("ws");
+const readline = require("readline");
 
 // A room, which holds participants.
 class Channel {
@@ -85,8 +86,6 @@ class MessageError extends Error {}
 class Server {
     constructor(port) {
         this.channels = new Map();
-        // We're going to start off with a single channel that everyone joins.
-        this.channels.set("all", new Channel());
 
         // Right now, participants can only join a maximum of one channel. This may change in the
         // future.
@@ -195,4 +194,23 @@ class Server {
     }
 }
 
-new Server(8080);
+const server = new Server(process.env.PORT);
+
+// New channels can be created from the command line.
+const rl = readline.createInterface(process.stdin, process.stdout);
+rl.setPrompt("quiver> ");
+rl.prompt();
+rl.on("line", (line) => {
+    if (/^[a-z0-9_\-]+$/i.test(line)) {
+        if (!server.channels.has(line)) {
+            const query_string = Buffer.from(`host=${process.env.HOST}&port=${process.env.PORT}&channel=${line}`).toString("base64");
+            console.log(`Created channel ${line}, with query string:`, query_string);
+            server.channels.set(line, new Channel());
+        } else {
+            console.error(`The channel ${line} already exists.`);
+        }
+    } else {
+        console.error("Cannot create a channel with the name: ", line);
+    }
+    rl.prompt();
+});
