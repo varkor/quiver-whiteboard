@@ -127,3 +127,17 @@ ul + ul {
 .noninteractive {
     pointer-events: none;
 }
+
+.status {
+    position: absolute;
+    top: 1em;
+    right: 1em;
+    color: hsl(0, 0%, 80%);
+    font-family: sans-serif;
+}
+.status.online::before {
+    content: "Online";
+}
+.status.offline::before {
+    content: "Offline";
+}

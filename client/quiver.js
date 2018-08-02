@@ -6,6 +6,7 @@ class Client {
     constructor(delegate) {
         this.ws = null;
         this.delegate = delegate;
+        this.offine = false;
     }
 
     static validate_data(sig, data) {
@@ -28,11 +29,17 @@ class Client {
         return true;
     }
 
+    offline_mode() {
+        this.offline = true;
+        this.delegate.offline();
+    }
+
     connect(host, port, channel) {
         if (/^[a-z0-9\.\-]+$/i.test(host) && /^[0-9]+$/.test(port) && /^[a-z0-9_\-]+$/i.test(channel)) {
             this.ws = new WebSocket(`wss://${host}:${port}`);
         } else {
             console.error(`Tried to connect to an invalid host, port or channel: ${host}:${port}#${channel}`);
+            this.offline_mode();
             return;
         }
 
@@ -73,7 +80,7 @@ class Client {
         // console.log("Received data:", data);
         switch (data.kind) {
             case "channel":
-            this.delegate.join();
+                this.delegate.join();
                 const canvas = data.canvas;
                 if (Array.isArray(canvas)) {
                     for (const action of canvas) {
@@ -94,22 +101,24 @@ class Client {
     }
 
     send_message(data) {
-        if (this.ws.readyState === this.ws.OPEN) {
-            // console.log("Sent data:", data);
-            if (data.kind === "draw") {
-                // We forward any drawing messages directly to the client, so that we
-                // can modify the canvas locally without any delay. The Painter's
-                // Algorithm will ensure that we end up with the correct result in the
-                // end, because we'll re-draw the data when we receive it from the
-                // server as well.
-                this.delegate.draw(data, false);
+        if (!this.offline) {
+            if (this.ws.readyState === this.ws.OPEN) {
+                // console.log("Sent data:", data);
+                this.ws.send(JSON.stringify(data));
+            } else {
+                // We should be able to delay sending messages until the WebSocket is ready,
+                // but for now, we'll simply ignore the message. It should be prevented by
+                // the UI, anyway.
+                console.error("WebSocket wasn't ready for data:", data);
             }
-            this.ws.send(JSON.stringify(data));
-        } else {
-            // We should be able to delay sending messages until the WebSocket is ready,
-            // but for now, we'll simply ignore the message. It should be prevented by
-            // the UI, anyway.
-            console.error("WebSocket wasn't ready for data:", data);
+        }
+        if (data.kind === "draw") {
+            // We forward any drawing messages directly to the client, so that we
+            // can modify the canvas locally without any delay. The Painter's
+            // Algorithm will ensure that we end up with the correct result in the
+            // end, because we'll re-draw the data when we receive it from the
+            // server as well.
+            this.delegate.draw(data, false);
         }
     }
 }
@@ -348,9 +357,19 @@ document.addEventListener("DOMContentLoaded", () => {
     brush_layer.element.classList.add("noninteractive");
     document.body.appendChild(brush_layer.element);
 
+    const status_indicator = document.createElement("div");
+    status_indicator.classList.add("status");
+    document.body.appendChild(status_indicator);
+
     const client = new Client({
         connect() {
             connecting_overlay.dataset.descr = "Loading canvas...";
+            status_indicator.classList.add("online");
+        },
+
+        offline() {
+            connecting_overlay.classList.add("hidden");
+            status_indicator.classList.add("offline");
         },
 
         disconnect() {
@@ -360,6 +379,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 connecting_overlay.dataset.descr = "Could not connect to server. Please try refreshing.";
             }
+            status_indicator.classList.remove("online", "offline");
         },
 
         join() {
@@ -454,7 +474,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (host !== undefined && port !== undefined && channel !== undefined) {
         client.connect(decodeURIComponent(host), decodeURIComponent(port), decodeURIComponent(channel));
     } else {
-        console.log("The host and port must be present in the URL query string to connect to the server.");
+        client.offline_mode();
     }
 
     const pen = new Pen();
