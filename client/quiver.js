@@ -710,7 +710,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // the secondary button and dragging using a stylus).
     window.addEventListener("wheel", (event) => {
         event.preventDefault();
-        stroke_range.value = Math.round(stroke_radius - event.wheelDeltaY / SCROLL_DAMPENING);
+        stroke_range.value = Math.round(stroke_radius + event.deltaY / SCROLL_DAMPENING);
         update_stroke_radius(parseInt(stroke_range.value));
     });
 });
