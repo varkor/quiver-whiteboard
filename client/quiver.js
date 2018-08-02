@@ -268,8 +268,14 @@ class Action {
         this.action = action;
         this.element = document.createElement("li");
         this.element.appendChild(document.createTextNode(name));
-        this.element.addEventListener("pointerdown", this.action);
-        this.element.addEventListener("mousedown", (event) => this.action(event, true));
+        this.element.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            this.action(event);
+        });
+        this.element.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            this.action(event, true);
+        });
     }
 }
 
@@ -279,7 +285,6 @@ let tools = [];
 class Tool extends Action {
     constructor(name, properties) {
         super(name, (event, stylus_button) => {
-            event.preventDefault();
             if (event.buttons & SECONDARY_PEN_BUTTON || stylus_button || event.shiftKey) {
                 // If we select the tool while holding the pen button,
                 // then we're going to toggle the tool *without affecting*
@@ -581,11 +586,13 @@ document.addEventListener("DOMContentLoaded", () => {
     // Action panel.
     const action_panel = document.createElement("ul");
     action_panel.appendChild(new Action("Clear", () => {
-        canvas.clear();
-        client.send_message({
-            kind: "draw",
-            shape: "clear",
-        });
+        if (window.confirm("Are you sure you want to clear the canvas?")) {
+            canvas.clear();
+            client.send_message({
+                kind: "draw",
+                shape: "clear",
+            });
+        }
     }).element);
     document.body.appendChild(action_panel);
 

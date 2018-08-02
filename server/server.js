@@ -69,6 +69,12 @@ class Channel {
             for (const participant of this.participants) {
                 participant.send(JSON.stringify(data));
             }
+            if (data.shape === "clear") {
+                // Special-case "clear" so that it wipes the history. For now, as we're
+                // sending every single message to each client when they join, this should
+                // reduce load.
+                this.canvas = [];
+            }
         }
     }
 }
