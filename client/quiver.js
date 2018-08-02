@@ -107,7 +107,8 @@ class Client {
             this.ws.send(JSON.stringify(data));
         } else {
             // We should be able to delay sending messages until the WebSocket is ready,
-            // but for now, we'll simply ignore the message.
+            // but for now, we'll simply ignore the message. It should be prevented by
+            // the UI, anyway.
             console.error("WebSocket wasn't ready for data:", data);
         }
     }

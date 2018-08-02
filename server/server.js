@@ -94,6 +94,10 @@ class Server {
         this.wss = new WebSocket.Server({ port });
 
         this.wss.on("connection", (ws) => {
+            // We add an extra property, `alive`, to WebSockets for a heartbeat protocol.
+            // This ensures clients will not time out if there's no communication for 30 s.
+            ws.alive = true;
+
             ws.on("message", (message) => {
                 try {
                     const data = JSON.parse(message);
@@ -111,10 +115,26 @@ class Server {
                     channel.participants.delete(ws);
                 }
                 if (this.participants.delete(ws)) {
-                    console.log("A client left.");
+                    // console.log("A client left.");
                 }
             });
+
+            ws.on("pong", () => ws.alive = true);
         });
+
+        const SECOND = 1000;
+        const HEARTBEAT_INTERVAL = 15 * SECOND;
+        setInterval(() => {
+            for (const ws of this.wss.clients) {
+                if (!ws.alive) {
+                    // Timeout unresponsive clients.
+                    ws.terminate();
+                    continue;
+                }
+                ws.alive = false;
+                ws.ping(null);
+            }
+        }, HEARTBEAT_INTERVAL);
     }
 
     static validate_data(sig, data) {
@@ -145,7 +165,7 @@ class Server {
                     const channel = this.channels.get(data.channel);
                     if (channel !== undefined) {
                         if (channel.admit(ws)) {
-                            console.log("A client joined a channel.");
+                            // console.log("A client joined a channel.");
                             this.participants.set(ws, channel);
                         }
                     } else {
