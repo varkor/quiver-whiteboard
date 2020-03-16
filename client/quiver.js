@@ -350,10 +350,11 @@ document.addEventListener("DOMContentLoaded", () => {
     connecting_overlay.dataset.descr = "Connecting...";
     document.body.appendChild(connecting_overlay);
 
-    const canvas = new Canvas(640, 480, "white");
+    const [width, height] = [1024, 640];
+    const canvas = new Canvas(width, height, "white");
     document.body.appendChild(canvas.element);
 
-    const brush_layer = new Canvas(640, 480, null);
+    const brush_layer = new Canvas(width, height, null);
     brush_layer.element.classList.add("noninteractive");
     document.body.appendChild(brush_layer.element);
 
