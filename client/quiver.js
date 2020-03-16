@@ -34,11 +34,12 @@ class Client {
         this.delegate.offline();
     }
 
-    connect(host, port, channel) {
-        if (/^[a-z0-9\.\-]+$/i.test(host) && /^[0-9]+$/.test(port) && /^[a-z0-9_\-]+$/i.test(channel)) {
-            this.ws = new WebSocket(`wss://${host}:${port}`);
+    connect(channel) {
+        const host = location.origin.replace(/^http/, "ws");
+        if (/^[a-z0-9_\-]+$/i.test(channel)) {
+            this.ws = new WebSocket(host);
         } else {
-            console.error(`Tried to connect to an invalid host, port or channel: ${host}:${port}#${channel}`);
+            console.error(`Tried to connect to an invalid channel: #${channel}`);
             this.offline_mode();
             return;
         }
@@ -469,11 +470,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     // For now, we're going to fetch the host and port for the WebSocket server from the query string.
     const query_pairs = new Map(atob(window.location.search.slice(1)).split("&").map((pair) => pair.split("=")));
-    const host = query_pairs.get("host");
-    const port = query_pairs.get("port");
     const channel = query_pairs.get("channel");
-    if (host !== undefined && port !== undefined && channel !== undefined) {
-        client.connect(decodeURIComponent(host), decodeURIComponent(port), decodeURIComponent(channel));
+    if (channel !== undefined) {
+        client.connect(decodeURIComponent(channel));
     } else {
         client.offline_mode();
     }

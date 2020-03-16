@@ -1,5 +1,6 @@
 const WebSocket = require("ws");
 const readline = require("readline");
+const express = require("express");
 
 // A room, which holds participants.
 class Channel {
@@ -84,14 +85,14 @@ class Channel {
 class MessageError extends Error {}
 
 class Server {
-    constructor(port) {
+    constructor(webserver) {
         this.channels = new Map();
 
         // Right now, participants can only join a maximum of one channel. This may change in the
         // future.
         this.participants = new Map();
 
-        this.wss = new WebSocket.Server({ port });
+        this.wss = new WebSocket.Server({ server: webserver });
 
         this.wss.on("connection", (ws) => {
             // We add an extra property, `alive`, to WebSockets for a heartbeat protocol.
@@ -194,33 +195,19 @@ class Server {
     }
 }
 
-if (typeof process.env.PORT === "undefined") {
-    console.error("You must specify `$PORT` in the environment variables.");
-} else {
-    const server = new Server(process.env.PORT);
+const PORT = process.env.PORT || 3000;
 
-    const add_channel = (name) => {
-        const query_string = Buffer.from(`host=${process.env.HOST}&port=${process.env.PORT}&channel=${name}`).toString("base64");
-        console.log(`Created channel ${name}, with query string:`, query_string);
-        server.channels.set(name, new Channel());
-    };
+const app = express();
 
-    add_channel("public");
+const webserver = app.use(express.static("client"))
+    .listen(PORT, () => console.log(`Listening on ${PORT}.`));
 
-    // New channels can be created from the command line.
-    const rl = readline.createInterface(process.stdin, process.stdout);
-    rl.setPrompt("quiver> ");
-    rl.prompt();
-    rl.on("line", (line) => {
-        if (/^[a-z0-9_\-]+$/i.test(line)) {
-            if (!server.channels.has(line)) {
-                add_channel(line);
-            } else {
-                console.error(`The channel ${line} already exists.`);
-            }
-        } else {
-            console.error("Cannot create a channel with the name: ", line);
-        }
-        rl.prompt();
-    });
-}
+const server = new Server(webserver);
+
+const add_channel = (name) => {
+    const query_string = Buffer.from(`channel=${name}`).toString("base64");
+    console.log(`Created channel ${name}, with query string:`, query_string);
+    server.channels.set(name, new Channel());
+};
+
+add_channel("public");

@@ -1,0 +1,11 @@
+{
+    "name": "quiver",
+    "version": "0.0.0",
+    "main": "server.js",
+    "dependencies": {
+        "bufferutil": "^4.0.1",
+        "express": "^4.17.1",
+        "utf-8-validate": "^5.0.2",
+        "ws": "^6.0.0"
+    }
+}
