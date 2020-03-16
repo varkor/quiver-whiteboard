@@ -199,6 +199,14 @@ if (typeof process.env.PORT === "undefined") {
 } else {
     const server = new Server(process.env.PORT);
 
+    const add_channel = (name) => {
+        const query_string = Buffer.from(`host=${process.env.HOST}&port=${process.env.PORT}&channel=${name}`).toString("base64");
+        console.log(`Created channel ${name}, with query string:`, query_string);
+        server.channels.set(name, new Channel());
+    };
+
+    add_channel("public");
+
     // New channels can be created from the command line.
     const rl = readline.createInterface(process.stdin, process.stdout);
     rl.setPrompt("quiver> ");
@@ -206,9 +214,7 @@ if (typeof process.env.PORT === "undefined") {
     rl.on("line", (line) => {
         if (/^[a-z0-9_\-]+$/i.test(line)) {
             if (!server.channels.has(line)) {
-                const query_string = Buffer.from(`host=${process.env.HOST}&port=${process.env.PORT}&channel=${line}`).toString("base64");
-                console.log(`Created channel ${line}, with query string:`, query_string);
-                server.channels.set(line, new Channel());
+                add_channel(line);
             } else {
                 console.error(`The channel ${line} already exists.`);
             }
