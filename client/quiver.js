@@ -713,5 +713,5 @@ document.addEventListener("DOMContentLoaded", () => {
         event.preventDefault();
         stroke_range.value = Math.round(stroke_radius + event.deltaY / SCROLL_DAMPENING);
         update_stroke_radius(parseInt(stroke_range.value));
-    });
+    }, { passive: false });
 });
