@@ -194,23 +194,27 @@ class Server {
     }
 }
 
-const server = new Server(process.env.PORT);
+if (typeof process.env.PORT === "undefined") {
+    console.error("You must specify `$PORT` in the environment variables.");
+} else {
+    const server = new Server(process.env.PORT);
 
-// New channels can be created from the command line.
-const rl = readline.createInterface(process.stdin, process.stdout);
-rl.setPrompt("quiver> ");
-rl.prompt();
-rl.on("line", (line) => {
-    if (/^[a-z0-9_\-]+$/i.test(line)) {
-        if (!server.channels.has(line)) {
-            const query_string = Buffer.from(`host=${process.env.HOST}&port=${process.env.PORT}&channel=${line}`).toString("base64");
-            console.log(`Created channel ${line}, with query string:`, query_string);
-            server.channels.set(line, new Channel());
-        } else {
-            console.error(`The channel ${line} already exists.`);
-        }
-    } else {
-        console.error("Cannot create a channel with the name: ", line);
-    }
+    // New channels can be created from the command line.
+    const rl = readline.createInterface(process.stdin, process.stdout);
+    rl.setPrompt("quiver> ");
     rl.prompt();
-});
+    rl.on("line", (line) => {
+        if (/^[a-z0-9_\-]+$/i.test(line)) {
+            if (!server.channels.has(line)) {
+                const query_string = Buffer.from(`host=${process.env.HOST}&port=${process.env.PORT}&channel=${line}`).toString("base64");
+                console.log(`Created channel ${line}, with query string:`, query_string);
+                server.channels.set(line, new Channel());
+            } else {
+                console.error(`The channel ${line} already exists.`);
+            }
+        } else {
+            console.error("Cannot create a channel with the name: ", line);
+        }
+        rl.prompt();
+    });
+}
